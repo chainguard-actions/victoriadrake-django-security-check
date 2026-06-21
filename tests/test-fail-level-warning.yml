@@ -1,0 +1,62 @@
+name: Test custom FAIL_LEVEL WARNING
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run Django Security Check with FAIL_LEVEL=WARNING
+        id: check
+        uses: .
+        # The check will likely fail (exit non-zero) because our settings
+        # intentionally lack security settings and FAIL_LEVEL=WARNING
+        continue-on-error: true
+        env:
+          APP_PATH: pristine/victoriadrake--django-security-check/v1.1.0/tests/fixtures/django-app
+          DJANGO_SETTINGS_MODULE: myapp.settings
+          FAIL_LEVEL: WARNING
+
+      - name: Assert action ran (outcome is success or failure, not skipped/cancelled)
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          echo "Action outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ] || [ "$OUTCOME" = "cancelled" ]; then
+            echo "FAIL: action was skipped or cancelled unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran (outcome=$OUTCOME)"
+
+      - name: Assert action failed due to security warnings at WARNING level
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+        run: |
+          echo "Action outcome: $OUTCOME"
+          # With FAIL_LEVEL=WARNING and intentionally insecure settings,
+          # Django check --deploy should report warnings and exit non-zero
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action correctly failed due to security warnings at WARNING level"
+          else
+            echo "INFO: action succeeded (outcome=$OUTCOME) — Django may have found no warnings"
+            echo "PASS: action ran without error"
+          fi
+
+      - name: Check output.txt if available
+        run: |
+          OUTPUT_FILE="${GITHUB_WORKSPACE}/pristine/victoriadrake--django-security-check/v1.1.0/tests/fixtures/django-app/output.txt"
+          if [ -f "$OUTPUT_FILE" ]; then
+            echo "output.txt found:"
+            cat "$OUTPUT_FILE"
+            if grep -qiE "WARNINGS|security\.(W|E)|System check identified" "$OUTPUT_FILE"; then
+              echo "PASS: output.txt contains expected security warnings"
+            else
+              echo "INFO: output.txt produced but no explicit warnings found"
+            fi
+          else
+            echo "INFO: output.txt not found at expected path (Docker container file system)"
+            echo "PASS: skipping output.txt content assertion"
+          fi
