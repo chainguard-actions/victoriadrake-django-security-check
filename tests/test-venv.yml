@@ -6,44 +6,48 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run Django Security Check with venv
+      - name: Set up git origin reachable inside Docker container
+        run: |
+          git config user.email "test@example.com"
+          git config user.name "Test User"
+          rm -rf "$GITHUB_WORKSPACE/.git-remote"
+          git init --bare "$GITHUB_WORKSPACE/.git-remote"
+          git push "$GITHUB_WORKSPACE/.git-remote" HEAD:refs/heads/act-harness
+          git remote set-url origin "$GITHUB_WORKSPACE/.git-remote" 2>/dev/null || \
+            git remote add origin "$GITHUB_WORKSPACE/.git-remote"
+
+      - name: Run Django Security Check with venv ENV_TYPE
         id: check
         uses: .
-        continue-on-error: true
         env:
           ENV_TYPE: venv
-          DEP_PATH: pristine/victoriadrake--django-security-check/v1.1.0/tests/fixtures/django-app/requirements.txt
-          APP_PATH: pristine/victoriadrake--django-security-check/v1.1.0/tests/fixtures/django-app
+          DEP_PATH: tests/fixtures/django-app/requirements.txt
+          APP_PATH: tests/fixtures/django-app
+          FAIL_LEVEL: WARNING
           DJANGO_SETTINGS_MODULE: myapp.settings
-          FAIL_LEVEL: ERROR
 
-      - name: Assert action ran (outcome is success or failure, not skipped/cancelled)
-        env:
-          OUTCOME: ${{ steps.check.outcome }}
+      - name: Assert output.txt was created
         run: |
-          echo "Action outcome: $OUTCOME"
-          if [ "$OUTCOME" = "skipped" ] || [ "$OUTCOME" = "cancelled" ]; then
-            echo "FAIL: action was skipped or cancelled unexpectedly"
+          OUTPUT_FILE="$GITHUB_WORKSPACE/tests/fixtures/django-app/output.txt"
+          echo "Checking for output.txt at: $OUTPUT_FILE"
+          if [ ! -f "$OUTPUT_FILE" ]; then
+            echo "FAIL: output.txt was not created by the action"
             exit 1
           fi
-          echo "PASS: action ran (outcome=$OUTCOME)"
+          echo "PASS: output.txt exists"
+          echo "--- output.txt contents ---"
+          cat "$OUTPUT_FILE"
 
-      - name: Check output.txt if available
+      - name: Assert output contains Django check results
         run: |
-          OUTPUT_FILE="${GITHUB_WORKSPACE}/pristine/victoriadrake--django-security-check/v1.1.0/tests/fixtures/django-app/output.txt"
-          if [ -f "$OUTPUT_FILE" ]; then
-            echo "output.txt found:"
-            cat "$OUTPUT_FILE"
-            if grep -qiE "System check|security|WARNINGS|ERRORS|issue" "$OUTPUT_FILE"; then
-              echo "PASS: output.txt contains expected Django check output"
-            else
-              echo "INFO: output.txt produced but expected content not found"
-              echo "PASS: output.txt was created by the action"
-            fi
-          else
-            echo "INFO: output.txt not found at expected path (Docker container file system)"
-            echo "PASS: skipping output.txt content assertion"
+          OUTPUT_FILE="$GITHUB_WORKSPACE/tests/fixtures/django-app/output.txt"
+          CONTENT=$(cat "$OUTPUT_FILE")
+          echo "Content: $CONTENT"
+          # Django check --deploy always produces some output (warnings or "System check identified no issues")
+          if [ -z "$CONTENT" ]; then
+            echo "FAIL: output.txt is empty, expected Django check output"
+            exit 1
           fi
+          echo "PASS: output.txt has content"
